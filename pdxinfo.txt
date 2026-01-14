@@ -1,0 +1,6 @@
+name=Racer Sim
+author=@dloganberry
+description=Simpsons Hit & Run dodger: crank thru mooing cows, falling rocks, elephant stampedes! Glitch crashes + engine roar.
+bundleID=com.dloganberry.racersim
+version=1.0
+build=1
