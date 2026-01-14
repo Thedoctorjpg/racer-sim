@@ -54,15 +54,7 @@ playerSprite:add()
 local obstacles = {}
 local gameSpeed = 5
 
-for i = 1, NUM_OBSTACLES do
-    local obs = gfx.sprite.new(gfx.image.new(32,32))
-    obs:setCollideRect(0, 0, 32, 32)
-    obs:add()
-    respawnObs(obs)
-    table.insert(obstacles, obs)
-end
-
-function respawnObs(obs)
+local function respawnObs(obs)
     if #obstacleImages == 0 then return end
     local randIndex = math.random(#obstacleImages)
     obs:setImage(obstacleImages[randIndex])
@@ -79,6 +71,14 @@ function respawnObs(obs)
     if snd then
         snd:play(0)
     end
+end
+
+for i = 1, NUM_OBSTACLES do
+    local obs = gfx.sprite.new(gfx.image.new(32,32))
+    obs:setCollideRect(0, 0, 32, 32)
+    obs:add()
+    respawnObs(obs)
+    table.insert(obstacles, obs)
 end
 
 -- Game state
@@ -121,12 +121,12 @@ function pd.update()
         for _, obs in ipairs(obstacles) do
             obs:moveBy(obs.speedX, obs.speedY)
             if obs.isFalling then
-                obs.speedY += GRAVITY
+                obs.speedY = obs.speedY + GRAVITY
             end
             local ox, oy = obs:getPosition()
             if ox < -40 or (obs.isFalling and oy > 260) then
                 respawnObs(obs)
-                score += 1
+                score = score + 1
             end
         end
 
@@ -143,7 +143,7 @@ function pd.update()
         end
 
     elseif gameState == "glitching" then
-        glitchTimer -= 1
+        glitchTimer = glitchTimer - 1
         if failIgnition and math.random() < 0.4 then
             failIgnition:play(0)
         end
@@ -190,7 +190,7 @@ function pd.update()
 
         for i = 1, 240, math.random(1, 3) do
             if math.random() > 0.15 then
-                local offset = math.random(-4, 4) + (shakeY // 3)
+                local offset = math.random(-4, 4) + math.floor(shakeY / 3)
                 gfx.drawLine(0, i + offset, 400, i + offset)
             end
         end
