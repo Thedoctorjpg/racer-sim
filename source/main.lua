@@ -1,243 +1,85 @@
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
 
-local pd <const> = playdate
-local gfx <const> = pd.graphics
+local pd = playdate
+local gfx = pd.graphics
 
--- Load images (nil-safe)
-local playerImage = gfx.image.new("images/player_in_car")
-if playerImage then playerImage = playerImage:scaledImage(0.5) end
-
-local damagedImage = gfx.image.new("images/damaged_capybara")
-if damagedImage then damagedImage = damagedImage:scaledImage(0.5) end
-
-local obstacleNames = {"rock", "birds", "cow-kick-can", "elephant", "giraffe", "lizard"}
-local obstacleImages = {}
-for _, name in ipairs(obstacleNames) do
-    local img = gfx.image.new("images/" .. name)
+-- Helper to load & force-resize image to 32x32
+local function loadAndResize(path)
+    local img = gfx.image.new(path)
     if img then
-        table.insert(obstacleImages, img:scaledImage(0.5))
+        return img:scaledImage(32 / img:getSize())  -- scale to fit 32px width (preserves aspect, but Playdate crops/centers nicely)
+    else
+        -- fallback tiny black square if image missing
+        local fallback = gfx.image.new(32, 32)
+        gfx.pushContext(fallback)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.fillRect(0, 0, 32, 32)
+        gfx.popContext()
+        return fallback
     end
 end
 
--- Sounds - no CoreLibs/sound import needed!
-local enginePlayer = playdate.sound.fileplayer.new("sounds/car-engine-roaring")
-if enginePlayer then
-    enginePlayer:setVolume(0.75)
-end
-
-local crashPlayer = playdate.sound.fileplayer.new("sounds/car-crash-sound-effect")
-local damagePlayer = playdate.sound.fileplayer.new("sounds/damage")
-local startPlayer = playdate.sound.fileplayer.new("sounds/car-start")
-local failIgnition = playdate.sound.fileplayer.new("sounds/car-engine-ignition-fail")
-
-local animalPlayers = {
-    rock = playdate.sound.fileplayer.new("sounds/rocks-and-gravel-slide"),
-    birds = playdate.sound.fileplayer.new("sounds/bird_chirps"),
-    ["cow-kick-can"] = playdate.sound.fileplayer.new("sounds/cow-mooing"),
-    elephant = playdate.sound.fileplayer.new("sounds/elephant"),
-    lizard = playdate.sound.fileplayer.new("sounds/iguana"),
-    -- giraffe silent for now
-}
-
--- Constants
-local GRAVITY <const> = 0.25
-local NUM_OBSTACLES <const> = 6
-
--- Player sprite
-local playerSprite = gfx.sprite.new(playerImage or gfx.image.new(32,32))
-playerSprite:setCollideRect(0, 0, 32, 32)
-playerSprite:moveTo(40, 120)
+-- Player
+local playerStartX = 40
+local playerStartY = 120
+local playerSpeed = 3
+local playerImage = loadAndResize("images/capybara")
+local playerSprite = gfx.sprite.new(playerImage)
+playerSprite:setCollideRect(0, 0, 32, 32)  -- full 32×32 hitbox
+playerSprite:moveTo(playerStartX, playerStartY)
 playerSprite:add()
 
--- Obstacles table
-local obstacles = {}
-local gameSpeed = 5
-
-local function respawnObs(obs)
-    if #obstacleImages == 0 then return end
-    local randIndex = math.random(#obstacleImages)
-    obs:setImage(obstacleImages[randIndex])
-    local name = obstacleNames[randIndex]
-    obs.type = name
-    obs.isFalling = (name == "rock" or name == "birds")
-    obs.speedX = -(gameSpeed + math.random(3))
-    obs.speedY = 0
-    local startY = obs.isFalling and math.random(30, 70) or math.random(170, 210)
-    obs:moveTo(450 + math.random(0, 300), startY)
-    
-    -- Play animal sound on spawn/respawn
-    local snd = animalPlayers[name]
-    if snd then
-        snd:play(0)
-    end
-end
-
-for i = 1, NUM_OBSTACLES do
-    local obs = gfx.sprite.new(gfx.image.new(32,32))
-    obs:setCollideRect(0, 0, 32, 32)
-    obs:add()
-    respawnObs(obs)
-    table.insert(obstacles, obs)
-end
-
--- Game state
-local gameState = "playing"
+-- Game State
+local gameState = "stopped"
 local score = 0
-local highScore = 0
-local glitchTimer = 0
-local glitchActive = false
 
--- Start engine
-if enginePlayer then
-    enginePlayer:play(0)  -- loop forever
-    enginePlayer:setRate(0.8)
-end
+-- Obstacle
+local obstacleSpeed = 5
+local obstacleImage = loadAndResize("images/rock")
+local obstacleSprite = gfx.sprite.new(obstacleImage)
+obstacleSprite:setCollideRect(0, 0, 32, 32)  -- full size
+obstacleSprite:moveTo(450, 120)  -- start centered vertically
+obstacleSprite:add()
 
 function pd.update()
-    playerSprite:update()
-    for _, obs in ipairs(obstacles) do
-        obs:update()
-    end
+    gfx.sprite.update()
 
-    if gameState == "playing" then
-        gameSpeed = 5 + score * 0.05
-
-        -- Engine pitch rev
-        if enginePlayer then
-            local rate = 0.8 + (gameSpeed - 5) * 0.1
-            enginePlayer:setRate(math.min(2.0, rate))
+    if gameState == "stopped" then
+        gfx.drawTextAligned("Press A to Start", 200, 40, kTextAlignment.center)
+        if pd.buttonJustPressed(pd.kButtonA) then
+            gameState = "active"
+            score = 0
+            obstacleSpeed = 5
+            playerSprite:moveTo(playerStartX, playerStartY)
+            obstacleSprite:moveTo(450, math.random(40, 200))
         end
-
-        -- Crank movement
-        local crankPos = pd.getCrankPosition()
-        local dy = (crankPos <= 90 or crankPos >= 270) and -4 or 4
+    elseif gameState == "active" then
+        -- Crank vertical movement
+        local crankPosition = pd.getCrankPosition()
+        local dy = (crankPosition <= 90 or crankPosition >= 270) and -playerSpeed or playerSpeed
         playerSprite:moveBy(0, dy)
+
+        -- Keep player on screen
         local px, py = playerSprite:getPosition()
-        py = math.max(30, math.min(210, py))
+        py = math.max(16, math.min(240 - 16, py))  -- 32px tall, stay visible
         playerSprite:moveTo(px, py)
 
-        -- Obstacles
-        for _, obs in ipairs(obstacles) do
-            obs:moveBy(obs.speedX, obs.speedY)
-            if obs.isFalling then
-                obs.speedY = obs.speedY + GRAVITY
-            end
-            local ox, oy = obs:getPosition()
-            if ox < -40 or (obs.isFalling and oy > 260) then
-                respawnObs(obs)
-                score = score + 1
-            end
+        -- Move obstacle left
+        local actualX, actualY, collisions, length = obstacleSprite:moveWithCollisions(obstacleSprite.x - obstacleSpeed, obstacleSprite.y)
+
+        -- Reset when off left edge
+        if obstacleSprite.x < -32 then
+            obstacleSprite:moveTo(450, math.random(40, 200))
+            score += 1
+            obstacleSpeed += 0.2
         end
 
-        -- Collision
-        if #playerSprite:overlappingSprites() > 0 and not glitchActive then
-            if enginePlayer then enginePlayer:stop() end
-            if crashPlayer then crashPlayer:play(0) end
-            if damagePlayer then damagePlayer:play(0) end
-            playerSprite:setImage(damagedImage)
-            glitchActive = true
-            glitchTimer = 45
-            gameState = "glitching"
-            if score > highScore then highScore = score end
-        end
-
-    elseif gameState == "glitching" then
-        glitchTimer = glitchTimer - 1
-        if failIgnition and math.random() < 0.4 then
-            failIgnition:play(0)
-        end
-        if glitchTimer <= 0 then
-            glitchActive = false
-            gameState = "gameOver"
-        end
-
-    elseif gameState == "gameOver" then
-        if pd.buttonJustPressed(pd.kButtonA) then
-            score = 0
-            gameSpeed = 5
-            playerSprite:setImage(playerImage)
-            playerSprite:moveTo(40, 120)
-            for _, obs in ipairs(obstacles) do
-                respawnObs(obs)
-            end
-            if enginePlayer then
-                enginePlayer:play(0)
-                enginePlayer:setRate(0.8)
-            end
-            if startPlayer then startPlayer:play(0) end
-            gameState = "playing"
+        -- Crash conditions
+        if length > 0 or py > 240 + 16 or py < -16 then
+            gameState = "stopped"
         end
     end
 
-    -- Drawing
-    if glitchActive then
-        gfx.setColor(gfx.kColorBlack)
-        gfx.fillRect(0, 0, 400, 240)
-
-        local shakeX = math.random(-16, 16)
-        local shakeY = math.random(-16, 16)
-
-        local doInvert = math.random() < 0.35
-        if doInvert then
-            gfx.setColor(gfx.kColorWhite)
-            gfx.fillRect(0, 0, 400, 240)
-        end
-
-        gfx.setColor(gfx.kColorWhite)
-        local ditherAmt = 0.3 + math.random() * 0.7
-        gfx.setDitherPattern(ditherAmt, gfx.image.kDitherTypeBayer2x2)
-
-        for i = 1, 240, math.random(1, 3) do
-            if math.random() > 0.15 then
-                local offset = math.random(-4, 4) + math.floor(shakeY / 3)
-                gfx.drawLine(0, i + offset, 400, i + offset)
-            end
-        end
-
-        if math.random() < 0.6 then
-            local tearY = math.random(20, 220)
-            local tearWidth = math.random(60, 180)
-            local tearOffset = math.random(-40, 40)
-            gfx.drawLine(tearOffset, tearY, tearOffset + tearWidth, tearY)
-            gfx.drawLine(tearOffset, tearY + 1, tearOffset + tearWidth, tearY + 1)
-        end
-
-        for _ = 1, 120 do
-            gfx.drawPixel(math.random(0, 399), math.random(0, 239))
-        end
-
-        gfx.setDitherPattern(0.0)
-
-        gfx.pushContext()
-        gfx.setDrawOffset(shakeX, shakeY)
-        playerSprite:draw()
-        for _, obs in ipairs(obstacles) do
-            obs:draw()
-        end
-        gfx.popContext()
-
-        gfx.setColor(gfx.kColorWhite)
-        local texts = {"CRASH DETECTED", "CARTRIDGE ERROR", "SYSTEM MELTDOWN", "GLITCH MODE", "FATAL 0xDEAD"}
-        for i = 1, 5 do
-            local txt = texts[math.random(#texts)]
-            gfx.drawText(txt, math.random(10, 380), math.random(10, 220))
-        end
-
-    else
-        playerSprite:draw()
-        for _, obs in ipairs(obstacles) do
-            obs:draw()
-        end
-
-        gfx.setColor(gfx.kColorWhite)
-        gfx.drawText("Score: " .. score, 5, 5)
-        gfx.drawText("High: " .. highScore, 250, 5)
-
-        if gameState == "gameOver" then
-            gfx.drawText("GAME OVER!", 110, 100)
-            gfx.drawText("Final: " .. score, 140, 120)
-            gfx.drawText("Press A to restart", 100, 140)
-        end
-    end
+    gfx.drawTextAligned("Score: " .. score, 390, 10, kTextAlignment.right)
 end
